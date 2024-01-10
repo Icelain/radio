@@ -41,9 +41,12 @@ func (cp *ConnectionPool) Broadcast(buffer []byte) {
 
 	for bufferChannel, _ := range cp.bufferChannelMap {
 
+		clonedBuffer := make([]byte, 4096)
+		copy(clonedBuffer, buffer)
+
 		select {
 
-		case bufferChannel <- buffer:
+		case bufferChannel <- clonedBuffer:
 
 		default:
 
@@ -57,6 +60,36 @@ func NewConnectionPool() *ConnectionPool {
 
 	bufferChannelMap := make(map[chan []byte]struct{})
 	return &ConnectionPool{bufferChannelMap: bufferChannelMap}
+
+}
+
+func stream(connectionPool *ConnectionPool, content []byte) {
+
+	buffer := make([]byte, 4096)
+
+	for {
+
+		// clear() is a new builtin function introduced in go 1.21. Just reinitialize the buffer if on a lower version.
+		clear(buffer)
+		tempfile := bytes.NewReader(content)
+		ticker := time.NewTicker(time.Millisecond * 250)
+
+		for range ticker.C {
+
+			_, err := tempfile.Read(buffer)
+
+			if err == io.EOF {
+
+				ticker.Stop()
+				break
+
+			}
+
+			connectionPool.Broadcast(buffer)
+
+		}
+
+	}
 
 }
 
@@ -80,35 +113,7 @@ func main() {
 
 	connPool := NewConnectionPool()
 
-	go func(connectionPool *ConnectionPool, content []byte) {
-
-		buffer := make([]byte, 4096)
-
-		for {
-
-			// clear() is a new builtin function introduced in go 1.21
-			clear(buffer)
-			tempfile := bytes.NewReader(content)
-			ticker := time.NewTicker(time.Millisecond * 250)
-
-			for range ticker.C {
-
-				_, err := tempfile.Read(buffer)
-
-				if err == io.EOF {
-
-					ticker.Stop()
-					break
-
-				}
-
-				connectionPool.Broadcast(buffer)
-
-			}
-
-		}
-
-	}(connPool, ctn)
+	go stream(connPool, ctn)
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 
