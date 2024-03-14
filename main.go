@@ -11,26 +11,38 @@ import (
 	"time"
 )
 
+const (
+	BUFFERSIZE = 8192
+
+	//formula for delay = track_duration * buffer_size / aac_file_size
+	DELAY = 150
+)
+
+type Connection struct {
+	bufferChannel chan []byte
+	buffer        []byte
+}
+
 type ConnectionPool struct {
-	bufferChannelMap map[chan []byte]struct{}
-	mu               sync.Mutex
+	ConnectionMap map[*Connection]struct{}
+	mu            sync.Mutex
 }
 
-func (cp *ConnectionPool) AddConnection(bufferChannel chan []byte) {
+func (cp *ConnectionPool) AddConnection(connection *Connection) {
 
 	defer cp.mu.Unlock()
 	cp.mu.Lock()
 
-	cp.bufferChannelMap[bufferChannel] = struct{}{}
+	cp.ConnectionMap[connection] = struct{}{}
 
 }
 
-func (cp *ConnectionPool) DeleteConnection(bufferChannel chan []byte) {
+func (cp *ConnectionPool) DeleteConnection(connection *Connection) {
 
 	defer cp.mu.Unlock()
 	cp.mu.Lock()
 
-	delete(cp.bufferChannelMap, bufferChannel)
+	delete(cp.ConnectionMap, connection)
 
 }
 
@@ -39,14 +51,13 @@ func (cp *ConnectionPool) Broadcast(buffer []byte) {
 	defer cp.mu.Unlock()
 	cp.mu.Lock()
 
-	for bufferChannel, _ := range cp.bufferChannelMap {
+	for connection := range cp.ConnectionMap {
 
-		clonedBuffer := make([]byte, 4096)
-		copy(clonedBuffer, buffer)
+		copy(connection.buffer, buffer)
 
 		select {
 
-		case bufferChannel <- clonedBuffer:
+		case connection.bufferChannel <- connection.buffer:
 
 		default:
 
@@ -58,21 +69,21 @@ func (cp *ConnectionPool) Broadcast(buffer []byte) {
 
 func NewConnectionPool() *ConnectionPool {
 
-	bufferChannelMap := make(map[chan []byte]struct{})
-	return &ConnectionPool{bufferChannelMap: bufferChannelMap}
+	connectionMap := make(map[*Connection]struct{})
+	return &ConnectionPool{ConnectionMap: connectionMap}
 
 }
 
 func stream(connectionPool *ConnectionPool, content []byte) {
 
-	buffer := make([]byte, 4096)
+	buffer := make([]byte, BUFFERSIZE)
 
 	for {
 
 		// clear() is a new builtin function introduced in go 1.21. Just reinitialize the buffer if on a lower version.
 		clear(buffer)
 		tempfile := bytes.NewReader(content)
-		ticker := time.NewTicker(time.Millisecond * 250)
+		ticker := time.NewTicker(time.Millisecond * DELAY)
 
 		for range ticker.C {
 
@@ -127,24 +138,24 @@ func main() {
 
 		}
 
-		bufferChannel := make(chan []byte)
-		connPool.AddConnection(bufferChannel)
-		log.Printf("%s has connected\n", r.Host)
+		connection := &Connection{bufferChannel: make(chan []byte), buffer: make([]byte, BUFFERSIZE)}
+		connPool.AddConnection(connection)
+		log.Printf("%s has connected to the audio stream\n", r.Host)
 
 		for {
 
-			buf := <-bufferChannel
+			buf := <-connection.bufferChannel
 			if _, err := w.Write(buf); err != nil {
 
-				connPool.DeleteConnection(bufferChannel)
-				log.Printf("%s's connection has been closed\n", r.Host)
+				connPool.DeleteConnection(connection)
+				log.Printf("%s's connection to the audio stream has been closed\n", r.Host)
 				return
 
 			}
 			flusher.Flush()
+			clear(connection.buffer)
 
 		}
-
 	})
 
 	log.Println("Listening on port 8080...")
