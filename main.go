@@ -14,7 +14,7 @@ import (
 const (
 	BUFFERSIZE = 8192
 
-	//formula for delay = track_duration * buffer_size / aac_file_size
+	//delay = track_duration * buffer_size / aac_file_size
 	DELAY = 150
 )
 
